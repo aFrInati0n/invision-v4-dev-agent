@@ -1,0 +1,34 @@
+<?php
+/**
+ * @brief          {model_name} Model
+ * @author         <your_name>
+ * @package        Invision Community 4
+ * @subpackage     {app_name}
+ * @since          {date}
+ */
+
+namespace IPS\{app_name};
+
+if ( !defined( '\IPS\SUITE_UNIQUE_KEY' ) )
+{
+	header( ( $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.0' ) . ' 403 Forbidden' );
+	exit;
+}
+
+class _{model_name} extends \IPS\Patterns\ActiveRecord
+{
+	/**
+	 * @brief	[ActiveRecord] Multiton Store
+	 */
+	protected static $multitons = array();
+
+	/**
+	 * @brief	[ActiveRecord] Database Table
+	 */
+	public static $databaseTable = '{table_name}';
+
+	/**
+	 * @brief	[ActiveRecord] Database Prefix
+	 */
+	public static $databasePrefix = '{prefix}_';
+}

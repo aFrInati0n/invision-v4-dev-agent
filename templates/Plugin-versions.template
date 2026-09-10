@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plugin upgrade mechanism (IC4 4.7.25, verified from applications/core/modules/admin/applications/plugins.php).
+
+  <versions> holds one <version> per long version you ship.
+  - long="10000"  => the INSTALL setup class (runs on first install).
+  - long="NNNNN"  => runs only on upgrade, and only if NNNNN > the plugin's current long version.
+
+  IMPORTANT (verified): the element TEXT is PHP that the installer STRIPS the leading <?php tag
+  from, then eval()s in-process, then does `new $class()`. The class is a PLAIN class —
+  there is NO \IPS\Plugin\Setup base class to extend. Do NOT add `extends ...`.
+
+  Class name is FIXED (not a parameter):
+    install:  ips_plugins_setup_install
+    upgrade:  ips_plugins_setup_upg_{NNNNN}
+
+  After instantiation the installer calls step1(), step2(), ... in order.
+  Return true (=== true) to advance to the next step / next version; return an array with
+  an 'html' key to show UI and re-run the same step (pass data via Request::i()->extra).
+
+  Bump <plugin version="..."> to the new human version when you add a row.
+-->
+<plugin name="{plugin_name}" author="{author}" version="{new_human_version}">
+    <hooks>
+        <!-- unchanged from your current plugin; re-declared on every install/upgrade -->
+    </hooks>
+
+    <versions>
+        <!-- First-time install logic (class name is fixed: ips_plugins_setup_install) -->
+        <version long="10000" human="1.0.0">
+            &lt;?php
+            class ips_plugins_setup_install
+            {
+                public function step1()
+                {
+                    // create tables / seed rows / backfill, etc. — plain PHP, use \IPS\* singletons
+                    return true;
+                }
+            }
+            ?&gt;
+        </version>
+
+        <!-- Upgrade step: runs only when upgrading past the current long version to this one -->
+        <version long="{new_long_version}" human="{new_human_version}">
+            &lt;?php
+            class ips_plugins_setup_upg_{new_long_version}
+            {
+                public function step1()
+                {
+                    // migration / backfill for this version
+                    return true;
+                }
+            }
+            ?&gt;
+        </version>
+    </versions>
+</plugin>

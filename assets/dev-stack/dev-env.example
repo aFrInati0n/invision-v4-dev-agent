@@ -1,0 +1,17 @@
+# IC4 dev stack configuration
+# Copy to .env (git-ignored) if you need to override.
+# All values here are development defaults.
+
+# Where the IC4 source checkout lives (bind-mounted into web+php)
+IC4_SRC=../../source/sourcecode/invision-community
+
+# Published ports
+WEB_PORT=8080
+DB_PORT=3306
+REDIS_PORT=6379
+
+# MariaDB credentials
+DB_NAME=ic4
+DB_USER=ic4dev
+DB_PASSWORD=ic4devpw
+DB_ROOT_PASSWORD=devrootpw

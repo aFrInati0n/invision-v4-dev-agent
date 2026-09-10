@@ -1,0 +1,43 @@
+<?php
+/**
+ * @brief          {extension_name} Extension
+ * @author         <your_name>
+ * @copyright      (c) <year> <your_name>
+ * @package        Invision Community 4
+ * @subpackage     {app_name}
+ * @since          {date}
+ * @version        1.0.0
+ */
+
+namespace IPS\{app_name}\{extension_name};
+
+if ( !defined( '\IPS\SUITE_UNIQUE_KEY' ) )
+{
+	header( ( $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.0' ) . ' 403 Forbidden' );
+	exit;
+}
+
+/**
+ * {extension_name} Extension
+ *
+ * An extension is an optional feature module bundled inside an IC4 Application.
+ * Keep it self-contained: its own ActiveRecord models, controllers, and templates,
+ * all under the {app_name}\{extension_name} namespace.
+ */
+class _Extension
+{
+	/**
+	 * [ActiveRecord] Multiton Store
+	 */
+	protected static $multitons = array();
+
+	/**
+	 * [ActiveRecord] Database Table
+	 */
+	public static $databaseTable = '{app_name}_{extension_table}';
+
+	/**
+	 * [ActiveRecord] Database Prefix
+	 */
+	public static $databasePrefix = '{prefix}_';
+}

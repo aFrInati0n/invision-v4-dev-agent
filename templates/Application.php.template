@@ -1,0 +1,25 @@
+<?php
+/**
+ * @brief          Application Class
+ * @author         <your_name>
+ * @copyright      (c) <year> <your_name>
+ * @package        Invision Community 4
+ * @subpackage     {app_name}
+ * @since          {date}
+ * @version        1.0.0
+ */
+
+namespace IPS\{app_name};
+
+class _Application extends \IPS\Application
+{
+    /**
+     * Application initialized
+     *
+     * @return void
+     */
+    public function init()
+    {
+        parent::init();
+    }
+}

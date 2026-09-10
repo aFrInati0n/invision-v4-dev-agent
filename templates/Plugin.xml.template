@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin name="{plugin_name}" author="{author}" version="{version}">
+  <hooks>
+    <!-- type: C=code/class hook (class = target \IPS\... class), S=skin/template hook. filename is auto-generated if omitted. -->
+    <hook class="{target_class}" type="C" filename="{hook_filename}.php">{hook_php}</hook>
+  </hooks>
+  <settings>
+  </settings>
+</plugin>

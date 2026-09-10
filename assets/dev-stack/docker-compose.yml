@@ -1,0 +1,112 @@
+# IC4 4.7.25 dev stack — nginx + php-fpm + MariaDB + Redis
+# Fire up:   docker compose up -d --build
+# Tear down: docker compose down            (keeps volumes = DB survives)
+#            docker compose down -v         (destroys database too)
+#
+# Ports (all overridable via .env):
+#   web  http://localhost:8080   (IC4 front + install + ACP)
+#   db   127.0.0.1:3306          (MariaDB, app user from .env)
+#   redis 127.0.0.1:6379
+#
+# The IC4 source is bind-mounted from ../../source/sourcecode/invision-community
+# so PHP edits are picked up immediately (no rebuild). Set IC4_SRC=... in .env
+# to point somewhere else.
+
+name: ic4
+
+services:
+  web:
+    image: nginx:1.27-alpine
+    container_name: ic4-web
+    depends_on:
+      php:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      - ${IC4_SRC:-../../source/sourcecode/invision-community}:/var/www/html:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    restart: unless-stopped
+    healthcheck:
+      # / 307-redirects to the installer (which 500s without a session cookie),
+      # so probe a static file that always exists in the checkout instead.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/Credits.txt"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  php:
+    build: ./php
+    image: ic4-dev-php:8.2
+    container_name: ic4-php
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Reachable by the entrypoint waits + the dev-only license bypass
+      # (init.php checks getenv('IC4_DEV') — see learnings note, never
+      # remove this bypass outside a dev install)
+      IC4_DEV: "1"
+      DB_HOST: db
+      DB_PORT: "3306"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    volumes:
+      - ${IC4_SRC:-../../source/sourcecode/invision-community}:/var/www/html
+      - ic4-php-sessions:/var/lib/php/sessions
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit(@fsockopen(\"127.0.0.1\", 9000) ? 0 : 1);'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  db:
+    image: mariadb:11.4
+    container_name: ic4-db
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-devrootpw}
+      MARIADB_DATABASE: ${DB_NAME:-ic4}
+      MARIADB_USER: ${DB_USER:-ic4dev}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-ic4devpw}
+    ports:
+      - "127.0.0.1:${DB_PORT:-3306}:3306"
+    volumes:
+      - ic4-db-data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-allowed-packet=64M
+      - --innodb-buffer-pool-size=128M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: ic4-redis
+    command: ["redis-server", "--save", "60", "10", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ic4-redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ic4-db-data:
+  ic4-redis-data:
+  ic4-php-sessions:

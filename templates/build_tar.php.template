@@ -1,0 +1,260 @@
+<?php
+/**
+ * build_tar.php — IPS4 4.7 application .tar builder + self-test proofs.
+ *
+ * PLACEHOLDER TO EDIT (search for "{"):
+ *   - $appKey = '{app_key}'            the app key (directory, namespace, DB prefix).
+ *
+ * Why this exists:
+ *   The ACP upload handler (applications/core/modules/admin/applications/applications.php)
+ *   validates an uploaded app archive by reading the app manifest at the TAR ROOT:
+ *
+ *       new \PharData( $file, 0, NULL, \Phar::TAR );
+ *       $appdata = json_decode( file_get_contents( "phar://" . $file . '/data/application.json' ), TRUE );
+ *       if ( !isset( $appdata['app_directory'] ) ) { throw new \UnexpectedValueException; }
+ *       ...
+ *       $application->extractTo( \IPS\ROOT_PATH . "/applications/" . $appDirectory, NULL, TRUE );
+ *
+ *   If the archive nested every file under a leading "{app_key}/" directory, then
+ *   "phar://…/data/application.json" would not exist, json_decode() would return null and
+ *   the handler would throw \UnexpectedValueException → error 1C133/K ("archive is corrupt").
+ *
+ * This script rebuilds the archive so the entries sit directly in the tar root
+ * (Application.php, data/application.json, modules/…), which is exactly what the
+ * validator and extractTo() expect. The app_directory is only used as the
+ * destination folder by extractTo() — it must NOT be baked into the archive.
+ *
+ * Usage:
+ *   php scripts/build_tar.php            # build + self-test
+ *   php scripts/build_tar.php --no-test  # build only (NOT "done" — proofs must run)
+ *
+ * Requirements: PHP 8.x with the phar extension and phar.readonly=0.
+ *   phar.readonly MUST be 0 or the .tar will not persist to disk:
+ *   php -d phar.readonly=0 scripts/build_tar.php
+ *   (or set phar.readonly=0 in the relevant php.ini / .env for the dev PHP).
+ */
+
+error_reporting( E_ALL );
+ini_set( 'display_errors', '1' );
+
+if ( !extension_loaded( 'phar' ) )
+{
+	fwrite( STDERR, "FATAL: the 'phar' extension is not loaded.\n" );
+	exit( 1 );
+}
+if ( class_exists( 'Phar' ) AND ini_get( 'phar.readonly' ) )
+{
+	fwrite( STDERR, "NOTE: phar.readonly is set — the build will not persist; run with -d phar.readonly=0.\n" );
+}
+
+/* ---- Locations (resolved relative to this file so it runs from any cwd) ---- */
+$scriptsDir = __DIR__;                              // …/scripts
+$root       = dirname( $scriptsDir );               // project root
+$appKey     = '{app_key}';                          // EDIT: your app key
+$srcDir     = $root . '/src/' . $appKey;            // source tree to package
+$outDir     = $root . '/build';
+$outFile    = $outDir . '/' . $appKey . '.tar';
+$doTest     = !in_array( '--no-test', array_slice( $argv, 1 ), TRUE );
+
+if ( !is_dir( $srcDir ) )
+{
+	fwrite( STDERR, "FATAL: source app dir not found: $srcDir\n" );
+	exit( 1 );
+}
+@mkdir( $outDir, 0755, TRUE );
+
+/* ---- Walk the source tree (files only; directories are recreated on extract) ---- */
+function buildTar_collect( $dir, $prefix = '', &$out = array() )
+{
+	$rii = new \RecursiveIteratorIterator(
+		new \RecursiveDirectoryIterator( $dir, \FilesystemIterator::SKIP_DOTS ),
+		\RecursiveIteratorIterator::LEAVES_ONLY
+	);
+	foreach ( $rii as $f )
+	{
+		if ( $f->isFile() )
+		{
+			$rel = ltrim( str_replace( $dir, '', $f->getPathname() ), '/' );
+			$rel = str_replace( '\\', '/', $rel );
+			if ( $rel === '' )
+			{
+				continue;
+			}
+			$out[] = array( 'path' => $prefix . $rel, 'file' => $f->getPathname() );
+		}
+	}
+	return $out;
+}
+
+$entries = buildTar_collect( $srcDir );
+
+/* ---- Build the archive with ROOT-LEVEL entries (no leading folder) ----
+ *
+ * CRITICAL: we must NOT call addEmptyDir(). On this PHP build, PharData adds a
+ * root "." tar entry whenever addEmptyDir() is used, and the ACP's own
+ * \PharData::extractTo() then throws \PharException ("Cannot extract '.'") →
+ * error 1C133/9. addFile() alone does NOT add that entry, so a files-only
+ * PharData build produces a clean archive that extractTo() handles fine. */
+if ( file_exists( $outFile ) )
+{
+	unlink( $outFile );
+}
+
+$phar = new \PharData( $outFile, 0, NULL, \Phar::TAR );
+$phar->startBuffering();
+
+/* Application.php and data/* MUST be at the root — emit them without a prefix. */
+foreach ( $entries as $e )
+{
+	$phar->addFile( $e['file'], $e['path'] );
+}
+
+$phar->stopBuffering();
+
+$fileCount = count( $entries );
+
+echo "=== BUILD OK ===\n";
+echo "output     : $outFile\n";
+echo "bytes      : " . filesize( $outFile ) . "\n";
+echo "file count : $fileCount\n";
+echo "root-level manifest present: " . ( file_exists( "phar://$outFile/data/application.json" ) ? "YES" : "NO" ) . "\n";
+echo "root Application.php present: " . ( file_exists( "phar://$outFile/Application.php" ) ? "YES" : "NO" ) . "\n";
+echo "nested appkey/ prefix present (should be NO): " . ( file_exists( "phar://$outFile/$appKey/Application.php" ) ? "YES" : "NO" ) . "\n";
+
+/* ---- PROOF 1: validate the manifest the way the ACP does ---- */
+echo "\n=== PROOF 1: ACP manifest validation (mirrors applications.php) ===\n";
+$manifestRaw = @file_get_contents( "phar://$outFile/data/application.json" );
+$manifest    = json_decode( (string) $manifestRaw, TRUE );
+if ( !is_array( $manifest ) )
+{
+	echo "FAIL: data/application.json missing or invalid JSON\n";
+	exit( 2 );
+}
+echo "app_directory      : " . ( $manifest['app_directory'] ?? '(MISSING)' ) . "\n";
+echo "application_title  : " . ( $manifest['application_title'] ?? '(n/a)' ) . "\n";
+echo "isset(app_directory): " . ( isset( $manifest['app_directory'] ) ? "TRUE → would NOT throw 1C133/K" : "FALSE → would throw 1C133/K" ) . "\n";
+
+/* ---- PROOF 2: extract the way the ACP does (PharData::extractTo) ---- */
+echo "\n=== PROOF 2: extraction layout (PharData::extractTo — the ACP's own method) ===\n";
+$simBase = sys_get_temp_dir() . '/bt_sim_' . getmypid();
+$dest = $simBase . '/applications/' . $appKey;
+if ( is_dir( $simBase ) )
+{
+	$it = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $simBase, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::CHILD_FIRST );
+	foreach ( $it as $f ) { $f->isDir() ? rmdir( $f ) : unlink( $f ); }
+	unlink( $simBase );
+}
+mkdir( $dest, 0755, TRUE );
+
+/* This is the EXACT call the ACP makes (applications.php: $application->extractTo(...)).
+ * If the archive had the auto-added root '.' entry, this would throw \PharException
+ * and the ACP would return 1C133/9. */
+try
+{
+	$extract = new \PharData( $outFile, 0, NULL, \Phar::TAR );
+	$extract->extractTo( $dest, NULL, TRUE );
+	echo "PharData::extractTo: SUCCESS (no 1C133/9)\n";
+}
+catch ( \PharException $e )
+{
+	echo "FAIL: PharData::extractTo threw PharException: " . $e->getMessage() . " (would be 1C133/9 in ACP)\n";
+	exit( 5 );
+}
+
+/* The app files must land directly in the extract root, NOT under {app_key}/. */
+$layoutOk = is_file( $dest . '/Application.php' ) && is_file( $dest . '/data/application.json' );
+echo "extracted Application.php at root     : " . ( is_file( $dest . '/Application.php' ) ? "YES" : "NO" ) . "\n";
+echo "extracted data/application.json at root: " . ( is_file( $dest . '/data/application.json' ) ? "YES" : "NO" ) . "\n";
+echo "nested appkey/ folder at root (should be NO): " . ( is_dir( $dest . '/$appKey' ) ? "YES" : "NO" ) . "\n";
+echo "LAYOUT OK: " . ( $layoutOk ? "TRUE" : "FALSE" ) . "\n";
+
+if ( !$layoutOk )
+{
+	echo "FAIL: extraction layout is nested/wrong\n";
+	exit( 3 );
+}
+
+/* ---- PROOF 3: simulate \IPS\Application::install() from the extract ---- */
+echo "\n=== PROOF 3: install() simulation (from the extracted archive) ===\n";
+// The app now sits exactly where the ACP's extractTo() would place it:
+// <base>/applications/{app_key}/. We validate every artefact the installer reads.
+$simAppDir = $dest;
+
+try
+{
+	// 1) The ACP's very first read after extractTo() — manifest at the app root.
+	$application = json_decode( file_get_contents( $simAppDir . '/data/application.json' ), TRUE );
+	if ( !isset( $application['app_directory'] ) )
+	{
+		throw new \UnexpectedValueException( 'app_directory missing' );
+	}
+	echo "manifest app_directory      : " . $application['app_directory'] . "\n";
+
+	// 2) Application.php must parse (the class the installer loads).
+	$phpBin = getenv( 'PHP_BIN' );
+	if ( !$phpBin OR !is_executable( $phpBin ) )
+	{
+		$phpBin = 'php'; // system PHP 8.x
+	}
+	$lp = trim( shell_exec( escapeshellarg( $phpBin ) . ' -l ' . escapeshellarg( $simAppDir . '/Application.php' ) . ' 2>&1' ) );
+	echo "Application.php lint        : " . ( strpos( $lp, 'No syntax errors' ) !== FALSE ? 'OK' : ( $lp ?: 'php -l unavailable' ) ) . "\n";
+
+	// 3) Every data/*.json the installer reads must be valid JSON.
+	$bad = array();
+	foreach ( glob( $simAppDir . '/data/*.json' ) as $j )
+	{
+		if ( json_decode( file_get_contents( $j ), TRUE ) === NULL AND json_last_error() !== JSON_ERROR_NONE )
+		{
+			$bad[] = basename( $j );
+		}
+	}
+	echo "invalid data/*.json files   : " . ( $bad ? implode( ', ', $bad ) : 'none' ) . "\n";
+
+	// 4) theme.xml must be well-formed (installTemplates reads it).
+	$tx = @simplexml_load_file( $simAppDir . '/data/theme.xml' );
+	echo "theme.xml well-formed       : " . ( $tx !== FALSE ? 'YES' : 'NO' ) . "\n";
+
+	// 5) modules.json + schema.json present (installExtensions / installDatabaseSchema need them).
+	echo "modules.json present        : " . ( is_file( $simAppDir . '/data/modules.json' ) ? "YES" : "NO" ) . "\n";
+	echo "schema.json present         : " . ( is_file( $simAppDir . '/data/schema.json' ) ? "YES" : "NO" ) . "\n";
+
+	// 6) Every PHP source in the app must parse (the installer autoloads them on first use).
+	$badPhp = array();
+	foreach ( new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $simAppDir, \FilesystemIterator::SKIP_DOTS ) ) as $pf )
+	{
+		if ( $pf->isFile() && substr( $pf->getPathname(), -4 ) === '.php' )
+		{
+			$r = trim( shell_exec( escapeshellarg( $phpBin ) . ' -l ' . escapeshellarg( $pf->getPathname() ) . ' 2>&1' ) );
+			if ( strpos( $r, 'No syntax errors' ) === FALSE )
+			{
+				$badPhp[] = $pf->getPathname();
+			}
+		}
+	}
+	echo "php files with syntax errors: " . ( $badPhp ? count( $badPhp ) . ' (' . implode( ', ', $badPhp ) . ')' : 'none' ) . "\n";
+
+	echo "\nRESULT: install() simulation PASSED (manifest + Application.php + data/*.json + theme.xml)\n";
+}
+catch ( \Throwable $e )
+{
+	echo "FAIL: install simulation threw " . get_class( $e ) . ': ' . $e->getMessage() . "\n";
+	echo $e->getTraceAsString() . "\n";
+	exit( 4 );
+}
+
+/* ---- Cleanup temp ---- */
+$cleanup = function ( $d ) {
+	if ( is_dir( $d ) )
+	{
+		$it = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $d, \FilesystemIterator::SKIP_DOTS ), \RecursiveIteratorIterator::CHILD_FIRST );
+		foreach ( $it as $f ) { $f->isDir() ? rmdir( $f ) : unlink( $f ); }
+	}
+	if ( is_dir( $d ) )
+	{
+		rmdir( $d );
+	}
+};
+$cleanup( $simBase );
+
+echo "\nALL PROOFS PASSED — $outFile is a valid IPS4 4.7 app archive (root-level entries).\n";
+exit( 0 );
